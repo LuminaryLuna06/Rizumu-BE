@@ -19,11 +19,9 @@ const pomodoroCompleteLimit = redisRateLimit({
   keyPrefix: "rl:pomodoro-complete",
 });
 
-// 2. Giới hạn gửi quà
-// Sau khi xong 1 phiên mới được tặng quà, nên giới hạn này cũng cần chặt.
 const giftLimit = redisRateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 3, // Chỉ cho tặng 3 món quà/phút để tránh spam notification cho bạn bè
+  max: 10, // Cho phép tặng tối đa 10 món quà / phút
   keyPrefix: "rl:gift",
 });
 const viewLimit = redisRateLimit({

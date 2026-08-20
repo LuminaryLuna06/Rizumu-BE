@@ -344,8 +344,9 @@ export const getGiftsbyId = async (req, res) => {
 
 export const sendGift = async (req, res) => {
   try {
-    const { receiverId, icon } = req.body;
+    const { receiverId, icon, price } = req.body;
     const senderId = req.user.id;
+    const giftPrice = Math.max(0, Number(price) || 0);
 
     if (receiverId === senderId) {
       return res
@@ -353,9 +354,23 @@ export const sendGift = async (req, res) => {
         .json({ message: "You cannot send a gift to yourself" });
     }
 
-    const receiverProgress = await Progress.findOne({ user: receiverId });
+    const [senderProgress, receiverProgress] = await Promise.all([
+      Progress.findOne({ user: senderId }),
+      Progress.findOne({ user: receiverId }),
+    ]);
+
+    if (!senderProgress) {
+      return res.status(404).json({ message: "Sender progress not found" });
+    }
+
     if (!receiverProgress) {
       return res.status(404).json({ message: "Receiver progress not found" });
+    }
+
+    if (senderProgress.coins < giftPrice) {
+      return res
+        .status(400)
+        .json({ message: "Not enough coins to send this gift" });
     }
 
     const newGift = {
@@ -365,20 +380,24 @@ export const sendGift = async (req, res) => {
       createdAt: new Date(),
     };
 
+    // Push gift to receiver
     await Progress.findOneAndUpdate(
       { user: receiverId },
       { $push: { gifts: newGift } }
     );
 
-    await Progress.findOneAndUpdate(
+    // Deduct coins and increment gifts_sent on sender atomically
+    const updatedSender = await Progress.findOneAndUpdate(
       { user: senderId },
-      { $inc: { gifts_sent: 1 } }
+      { $inc: { gifts_sent: 1, coins: -giftPrice } },
+      { new: true }
     );
 
     return res.status(200).json({
       success: true,
       message: "Gift sent successfully!",
       gift: newGift,
+      coins: updatedSender?.coins ?? (senderProgress.coins - giftPrice),
     });
   } catch (error) {
     console.error("[sendGift ERROR]", error);
