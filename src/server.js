@@ -32,16 +32,26 @@ app.set("trust proxy", true);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://127.0.0.1:5173",
+  "http://192.168.1.157:5173",
+  "https://192.168.1.157:5173",
+  "http://192.168.1.3:5173",
+  "https://192.168.1.3:5173",
+  "https://rizumu-sage.vercel.app",
+  "https://rizumu.shore-keeper.com",
+  "https://rizumu.shore-keeper.com/",
+  "https://rizumu-api.shore-keeper.com",
+];
+
 //thiết lập socket
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [
-      "https://localhost:5173",
-      "http://localhost:5173",
-      "https://rizumu-sage.vercel.app",
-      "https://192.168.1.3:5173",
-    ],
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -66,15 +76,16 @@ app.use(
           "'self'",
           "'unsafe-inline'",
           "https://rizumu-sage.vercel.app",
+          "https://rizumu.shore-keeper.com",
         ],
         // Cho phép Socket.io kết nối
         connectSrc: [
           "'self'",
-          "https://rizumu-sage.vercel.app",
+          ...allowedOrigins,
+          "ws://localhost:3001",
           "ws://localhost:3000",
+          "wss://rizumu-api.shore-keeper.com",
           "wss://backend-school-pj-1.onrender.com",
-          "http://localhost:5173",
-          "https://192.168.1.3:5173",
         ],
         // Cho phép hiển thị ảnh từ base64 hoặc các link ảnh
         imgSrc: [
@@ -87,7 +98,11 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         // Chống nhúng trang web vào iframe để tránh Clickjacking
-        frameAncestors: ["'self'", "https://rizumu-sage.vercel.app"],
+        frameAncestors: [
+          "'self'",
+          "https://rizumu-sage.vercel.app",
+          "https://rizumu.shore-keeper.com",
+        ],
         objectSrc: ["'none'"],
         // Trusted Types directive for DOM XSS protection
         requireTrustedTypesFor: ["'script'"],
@@ -134,12 +149,7 @@ app.use(
 
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://rizumu-sage.vercel.app",
-      "https://localhost:5173",
-      "https://192.168.1.3:5173/",
-    ],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
