@@ -1,0 +1,52 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  # -------------------------------------------------------------
+  # 1. CI Job: Kiểm tra syntax và dependencies
+  # -------------------------------------------------------------
+  ci:
+    name: Build & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate server syntax
+        run: node --check src/server.js
+
+  # -------------------------------------------------------------
+  # 2. CD Job: Tự động deploy trên Self-Hosted Server
+  # -------------------------------------------------------------
+  deploy:
+    name: Deploy to Server
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Pull latest code & Restart PM2
+        run: |
+          set -e
+          echo "🚀 Bắt đầu deploy Backend..."
+          cd /home/luna/Github/Rizumu-BE
+          git fetch origin main
+          git reset --hard origin/main
+          npm install --production --no-audit
+          pm2 reload rizumu-backend || pm2 restart rizumu-backend || pm2 start src/server.js --name "rizumu-backend"
+          pm2 save
+          echo "✅ Deploy Backend hoàn tất!"
