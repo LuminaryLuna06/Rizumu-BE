@@ -1,8 +1,10 @@
 {
-  "name": "backend",
+  "name": "rizumu-be",
   "version": "1.0.0",
-  "description": "",
+  "description": "Rizumu Backend Service",
   "main": "src/server.js",
+  "repository": "https://github.com/LuminaryLuna06/Rizumu-BE.git",
+  "author": "Luna <maithetranh@gmail.com>",
   "scripts": {
     "start": "nodemon src/server.js",
     "dev": "nodemon src/server.js",

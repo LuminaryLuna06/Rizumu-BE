@@ -12,6 +12,7 @@ export const startSessionSchema = Joi.object({
 });
 
 export const updateSessionSchema = Joi.object({
+  session_id: objectId.optional(),
   duration: Joi.number().min(0),
   completed: Joi.boolean(),
   ended_at: Joi.date(),

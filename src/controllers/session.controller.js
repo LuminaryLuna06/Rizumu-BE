@@ -11,10 +11,16 @@ export const startSession = async (req, res) => {
       req.body;
     const user_id = req.user.id;
 
+    // Tự động đóng bất kỳ phiên chưa hoàn thành trước đó của user để tránh orphan data
+    await Session.updateMany(
+      { user_id: user_id, completed: false },
+      { $set: { completed: false, ended_at: new Date() } }
+    );
+
     const session = new Session({
       user_id: user_id,
       completed: false,
-      started_at: started_at,
+      started_at: started_at || new Date(),
       plannedDuration,
       ended_at: null,
       duration: 0,
@@ -47,12 +53,13 @@ export const updateSession = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const { duration, completed, ended_at } = req.body;
+    const { session_id, duration, completed, ended_at } = req.body;
 
-    const session = await Session.findOne({
-      user_id: userId,
-      completed: false,
-    }).sort({ started_at: -1 });
+    const query = session_id
+      ? { _id: session_id, user_id: userId }
+      : { user_id: userId, completed: false };
+
+    const session = await Session.findOne(query).sort({ started_at: -1 });
 
     if (!session) {
       return res
