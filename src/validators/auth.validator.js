@@ -38,3 +38,15 @@ export const getProfileByIdSchema = Joi.object({
 export const searchUserSchema = Joi.object({
   q: Joi.string().min(1).max(50).custom(cleanText).required(),
 });
+
+export const changePasswordSchema = Joi.object({
+  oldPassword: Joi.string().required(),
+  newPassword: Joi.string().min(6).max(128).required(),
+});
+
+export const googleLoginSchema = Joi.object({
+  email: Joi.string().email().required(),
+  name: Joi.string().max(100).allow("").optional(),
+  avatar: Joi.string().uri().allow("").optional(),
+  googleId: Joi.string().max(200).optional(),
+});

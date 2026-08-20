@@ -9,6 +9,8 @@ import {
   updateProfile,
   getProfilebyID,
   searchUsers,
+  changePassword,
+  googleLogin,
 } from "../controllers/auth.controller.js";
 import uploadAvatar from "../middlewares/uploadAvata.middleware.js";
 import { updateAvatar } from "../controllers/auth.controller.js";
@@ -22,6 +24,8 @@ import {
   updateProfileSchema,
   getProfileByIdSchema,
   searchUserSchema,
+  changePasswordSchema,
+  googleLoginSchema,
 } from "../validators/auth.validator.js";
 import redisRateLimit from "../middlewares/redisRateLimit.js";
 const router = express.Router();
@@ -46,6 +50,7 @@ const generalLimit = redisRateLimit({
 
 router.post("/register", authStrictLimit, validate(registerSchema), register);
 router.post("/login", authStrictLimit, validate(loginSchema), login);
+router.post("/google", authStrictLimit, validate(googleLoginSchema), googleLogin);
 
 // Refresh token
 router.post(
@@ -59,6 +64,15 @@ router.post(
 router.get("/profile", verifyToken, generalLimit, getProfile);
 
 router.post("/logout", verifyToken, logout);
+
+// Đổi mật khẩu
+router.post(
+  "/change-password",
+  verifyToken,
+  updateLimit,
+  validate(changePasswordSchema),
+  changePassword
+);
 
 // Upload ảnh: Giới hạn chặt vì tốn băng thông server
 router.post(

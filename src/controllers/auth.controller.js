@@ -390,3 +390,151 @@ export const searchUsers = async (req, res) => {
       .json({ message: "Lỗi server khi tìm kiếm người dùng" });
   }
 };
+
+// Đổi mật khẩu
+export const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { oldPassword, newPassword } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!user.password_hash) {
+      // User registered via Google/OAuth without an initial password
+      user.password = newPassword;
+      await user.save();
+      return res.json({ message: "Password set successfully" });
+    }
+
+    const isMatch = await user.comparePassword(oldPassword);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Mật khẩu hiện tại không chính xác" });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    return res.json({ message: "Đổi mật khẩu thành công" });
+  } catch (err) {
+    console.error("[CHANGE PASSWORD ERROR]", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Đăng nhập / Đăng ký Google (Firebase Auth)
+export const googleLogin = async (req, res) => {
+  try {
+    const { email, name, avatar, googleId } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    let user = await User.findOne({
+      $or: [{ email: normalizedEmail }, { username: normalizedEmail }],
+    });
+
+    if (!user) {
+      // Tạo user mới nếu lần đầu đăng nhập Google
+      user = new User({
+        username: normalizedEmail,
+        email: normalizedEmail,
+        name: name || normalizedEmail.split("@")[0],
+        avatar: avatar || null,
+        status: "online",
+      });
+
+      const newRoom = new Room({
+        name: "Study Room",
+        description: "Your personal space!",
+        owner_id: user._id,
+        room_members: [
+          {
+            user_id: user._id,
+            role: "admin",
+          },
+        ],
+      });
+
+      user.default_room_id = newRoom._id;
+      user.current_room_id = newRoom._id;
+
+      const accessToken = signAccessToken(user);
+      const refreshToken = signRefreshToken(user);
+      user.refreshToken = refreshToken;
+
+      await user.save();
+      await newRoom.save();
+
+      await Progress.create({
+        user: user._id,
+        coins: 10,
+        level: 1,
+        current_xp: 0,
+        remaining_xp: 50,
+        streak: 0,
+        total_hours: 0,
+        promo_complete: 0,
+        gifts: [],
+      });
+
+      setRefreshTokenCookie(res, refreshToken);
+
+      return res.status(201).json({
+        message: "Google login successful",
+        data: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          status: user.status,
+          avatar: user.avatar,
+          current_room_id: user.current_room_id,
+          default_room_id: user.default_room_id,
+          bio: user.bio,
+          country: user.country,
+        },
+        access_token: accessToken,
+      });
+    }
+
+    // User đã tồn tại
+    if (!user.email) {
+      user.email = normalizedEmail;
+    }
+    if (!user.avatar && avatar) {
+      user.avatar = avatar;
+    }
+    user.status = "online";
+
+    const accessToken = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    setRefreshTokenCookie(res, refreshToken);
+
+    return res.json({
+      message: "Google login successful",
+      data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        status: user.status,
+        avatar: user.avatar,
+        current_room_id: user.current_room_id,
+        default_room_id: user.default_room_id,
+        bio: user.bio,
+        country: user.country,
+      },
+      access_token: accessToken,
+    });
+  } catch (err) {
+    console.error("[GOOGLE LOGIN ERROR]", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
