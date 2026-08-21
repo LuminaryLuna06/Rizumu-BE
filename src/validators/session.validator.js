@@ -4,18 +4,21 @@ import { objectId, cleanText } from "./custom.js";
 export const startSessionSchema = Joi.object({
   plannedDuration: Joi.number()
     .min(0)
-    .max(24 * 3600),
-  started_at: Joi.date(),
-  timer_type: Joi.string(),
-  session_type: Joi.string(),
-  tag_id: Joi.string().allow(null).optional(),
+    .max(24 * 3600)
+    .optional(),
+  timer_type: Joi.string().optional(),
+  session_type: Joi.string().optional(),
+  tag_id: Joi.string().allow(null, "").optional(),
+  notes: Joi.string().max(500).allow("").optional(),
 });
 
 export const updateSessionSchema = Joi.object({
   session_id: objectId.optional(),
-  duration: Joi.number().min(0),
-  completed: Joi.boolean(),
-  ended_at: Joi.date(),
+  duration: Joi.number().min(0).optional(),
+  completed: Joi.boolean().optional(),
+  ended_at: Joi.date().optional(),
+  notes: Joi.string().max(500).allow("").optional(),
+  tag_id: Joi.string().allow(null, "").optional(),
 }).min(1);
 
 export const timeRangeQuerySchema = Joi.object({

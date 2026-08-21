@@ -404,68 +404,12 @@ export const sendGift = async (req, res) => {
     return res.status(500).json({ message: "Internal server error" });
   }
 };
-const calculateNextLevelXp = (currentLevel) => {
-  // Công thức: (50*L)^1.2
-  return Math.round(Math.pow(50 * currentLevel, 1.2));
-};
-//cả phần bên dưới có tác dụng cộng thêm phần xp và coin vào cho user khi front-end gọi
+// Cấm client gọi trực tiếp API này để tự cộng điểm (chống API spoofing)
 export const increaseUserProgress = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { current_xp: xpToAdd, coins } = req.body;
-
-    if (xpToAdd === undefined && coins === undefined) {
-      return res.status(400).json({ message: "Nothing to update" });
-    }
-
-    if (
-      (xpToAdd !== undefined && typeof xpToAdd !== "number") ||
-      (coins !== undefined && typeof coins !== "number")
-    ) {
-      return res.status(400).json({ message: "Values must be numbers" });
-    }
-
-    let progress = await Progress.findOne({ user: userId });
-
-    if (!progress) {
-      return res.status(404).json({ message: "Progress not found" });
-    }
-
-    if (coins !== undefined) {
-      progress.coins += coins;
-    }
-
-    if (xpToAdd !== undefined) {
-      progress.current_xp += xpToAdd;
-
-      // Nếu đây là lần đầu hoặc dữ liệu cũ chưa có mốc level tiếp theo
-      if (!progress.remaining_xp || progress.remaining_xp === 0) {
-        progress.remaining_xp = calculateNextLevelXp(progress.level);
-      }
-
-      // Trong khi XP tổng lớn hơn hoặc bằng mốc XP cần thiết của level hiện tại
-      while (progress.current_xp >= progress.remaining_xp) {
-        progress.level += 1;
-        // Tính toán mốc XP mới cần đạt được để lên level tiếp theo
-        progress.remaining_xp = calculateNextLevelXp(progress.level);
-      }
-    }
-
-    await progress.save();
-
-    return res.json({
-      success: true,
-      data: {
-        level: progress.level,
-        current_xp: progress.current_xp,
-        remaining_xp: progress.remaining_xp,
-        coins: progress.coins,
-      },
-    });
-  } catch (err) {
-    console.error("Increase Progress Error:", err);
-    return res.status(500).json({ message: "Server error" });
-  }
+  return res.status(403).json({
+    success: false,
+    message: "Thao tác bị từ chối: Điểm thưởng và XP chỉ được hệ thống cấp tự động khi kết thúc phiên học hợp lệ.",
+  });
 };
 
 export const getUserProgress = async (req, res) => {

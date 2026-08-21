@@ -4,30 +4,71 @@ import Message from "../models/message.js";
 import mongoose from "mongoose";
 import Friendship from "../models/friendship.js";
 import { io } from "../server.js";
+import { awardSessionRewards } from "../utils/progressHelper.js";
+
+// Giới hạn học tập tối đa trong 1 ngày: 16 tiếng = 57,600 giây
+const MAX_DAILY_SECONDS = 16 * 60 * 60;
+
+/**
+ * Tính tổng số giây user đã học trong ngày hôm nay (tính từ 00:00:00 UTC)
+ */
+const getTodayStudyDuration = async (userId, todayStart, currentSessionId = null) => {
+  const result = await Session.aggregate([
+    {
+      $match: {
+        user_id: new mongoose.Types.ObjectId(userId),
+        completed: true,
+        started_at: { $gte: todayStart },
+        _id: { $ne: currentSessionId ? new mongoose.Types.ObjectId(currentSessionId) : null },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        totalDuration: { $sum: "$duration" },
+      },
+    },
+  ]);
+
+  return result[0]?.totalDuration || 0;
+};
+
 // Bắt đầu session mới
 export const startSession = async (req, res) => {
   try {
-    const { plannedDuration, started_at, timer_type, session_type, tag_id } =
-      req.body;
+    const { plannedDuration, timer_type, session_type, tag_id, notes } = req.body;
     const user_id = req.user.id;
+    const serverNow = new Date();
 
-    // Tự động đóng bất kỳ phiên chưa hoàn thành trước đó của user để tránh orphan data
-    await Session.updateMany(
-      { user_id: user_id, completed: false },
-      { $set: { completed: false, ended_at: new Date() } }
-    );
+    // 1. Tự động đóng bất kỳ phiên chưa hoàn thành trước đó của user để tránh orphan data
+    const activeSessions = await Session.find({
+      user_id: user_id,
+      completed: false,
+    });
 
+    for (const oldSession of activeSessions) {
+      const elapsed = Math.max(
+        0,
+        Math.floor((serverNow.getTime() - new Date(oldSession.started_at).getTime()) / 1000)
+      );
+      oldSession.completed = false;
+      oldSession.ended_at = serverNow;
+      oldSession.duration = Math.min(elapsed, MAX_DAILY_SECONDS);
+      await oldSession.save();
+    }
+
+    // 2. Luôn sử dụng timestamp của Server cho started_at (chống clock tampering)
     const session = new Session({
       user_id: user_id,
       completed: false,
-      started_at: started_at || new Date(),
-      plannedDuration,
+      started_at: serverNow,
+      plannedDuration: Math.max(0, Number(plannedDuration) || 0),
       ended_at: null,
       duration: 0,
-      timer_type: timer_type,
-      session_type: session_type,
-      notes: "",
-      tag_id: tag_id,
+      timer_type: timer_type || "focus",
+      session_type: session_type || "pomodoro",
+      notes: notes || "",
+      tag_id: tag_id || "",
     });
 
     await session.save();
@@ -38,7 +79,7 @@ export const startSession = async (req, res) => {
         io.to(user.current_room_id.toString()).emit("new_message", {
           sender_id: user_id,
           content: `${user.name} is aura farming!`,
-          createdAt: new Date().toISOString(),
+          createdAt: serverNow.toISOString(),
           type: "system",
         });
       }
@@ -46,14 +87,16 @@ export const startSession = async (req, res) => {
 
     res.status(201).json({ message: "Session started", session });
   } catch (err) {
+    console.error("[startSession ERROR]", err);
     res.status(500).json({ message: err.message });
   }
 };
+
 export const updateSession = async (req, res) => {
   try {
     const userId = req.user.id;
-
-    const { session_id, duration, completed, ended_at } = req.body;
+    const { session_id, duration: clientDuration, completed, notes, tag_id } = req.body;
+    const serverNow = new Date();
 
     const query = session_id
       ? { _id: session_id, user_id: userId }
@@ -67,34 +110,102 @@ export const updateSession = async (req, res) => {
         .json({ message: "Không tìm thấy phiên làm việc đang diễn ra." });
     }
 
-    if (duration !== undefined) session.duration = Number(duration);
+    if (session.completed) {
+      return res
+        .status(400)
+        .json({ message: "Phiên làm việc này đã hoàn thành trước đó." });
+    }
+
+    // 1. Tính thời gian thực tế đã trôi qua kể từ lúc session bắt đầu
+    const serverElapsedSeconds = Math.max(
+      0,
+      Math.floor((serverNow.getTime() - new Date(session.started_at).getTime()) / 1000)
+    );
+
+    // 2. Validate client duration: cho phép nhỏ hơn hoặc bằng serverElapsed (do pause), dung sai +5s
+    let validSessionDuration = serverElapsedSeconds;
+    if (clientDuration !== undefined && clientDuration !== null) {
+      const parsedClientDuration = Math.max(0, Number(clientDuration) || 0);
+      validSessionDuration = Math.min(parsedClientDuration, serverElapsedSeconds + 5);
+    }
 
     if (completed === true) {
+      // 3. Giới hạn 16 tiếng / ngày (57,600 giây)
+      const todayStart = new Date(serverNow);
+      todayStart.setUTCHours(0, 0, 0, 0);
+
+      const alreadyStudiedToday = await getTodayStudyDuration(userId, todayStart, session._id);
+      const remainingDailySeconds = Math.max(0, MAX_DAILY_SECONDS - alreadyStudiedToday);
+
+      const actualDuration = Math.min(validSessionDuration, remainingDailySeconds);
+      const isDailyLimitReached = (alreadyStudiedToday + actualDuration) >= MAX_DAILY_SECONDS;
+
       session.completed = true;
-      session.ended_at = ended_at ? new Date(ended_at) : new Date();
+      session.ended_at = serverNow;
+      session.duration = actualDuration;
+      if (notes !== undefined) session.notes = notes;
+      if (tag_id !== undefined) session.tag_id = tag_id;
 
-      if (
-        session.timer_type === "focus" ||
-        session.session_type === "pomodoro"
-      ) {
+      // 4. Tính toán phần thưởng tự động
+      const earnedXp = Math.floor(actualDuration / 60);
+      const earnedCoins = Math.floor(actualDuration / 600);
+      const isFullPomodoro = session.plannedDuration && session.plannedDuration > 0
+        ? actualDuration >= (session.plannedDuration - 10)
+        : false;
+
+      let rewardProgress = null;
+      if (session.session_type === "pomodoro" || session.timer_type === "focus") {
+        rewardProgress = await awardSessionRewards({
+          userId,
+          earnedXp,
+          earnedCoins,
+          isFullPomodoro,
+          durationSeconds: actualDuration,
+        });
+
         const user = await User.findById(userId).select("name current_room_id");
-
         if (user && user.current_room_id) {
           io.to(user.current_room_id.toString()).emit("new_message", {
             sender_id: userId,
             content: `${user.name} has finished aura farming!`,
-            createdAt: new Date().toISOString(),
+            createdAt: serverNow.toISOString(),
             type: "system",
           });
         }
       }
+
+      await session.save();
+
+      return res.status(200).json({
+        message: isDailyLimitReached
+          ? "Bạn đã đạt giới hạn học tập tối đa 16 tiếng hôm nay!"
+          : isFullPomodoro
+          ? "Hoàn thành chu kỳ Pomodoro!"
+          : "Cập nhật session thành công",
+        session,
+        rewards: {
+          earnedXp,
+          earnedCoins,
+          isFullPomodoro,
+          progress: rewardProgress,
+        },
+        meta: {
+          todayTotalHours: parseFloat(((alreadyStudiedToday + actualDuration) / 3600).toFixed(2)),
+          isDailyLimitReached,
+        },
+      });
     }
+
+    // Nếu chỉ cập nhật thông tin giữa phiên (ghi chú, tag, duration tạm thời)
+    if (notes !== undefined) session.notes = notes;
+    if (tag_id !== undefined) session.tag_id = tag_id;
+    session.duration = validSessionDuration;
 
     await session.save();
 
     res.status(200).json({ message: "Cập nhật session thành công", session });
   } catch (err) {
-    console.error(err);
+    console.error("[updateSession ERROR]", err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -355,6 +466,7 @@ export const getLeaderboard = async (req, res) => {
         $match: {
           completed: true,
           started_at: { $gte: start, $lte: end },
+          duration: { $gt: 0, $lte: 86400 },
         },
       },
 
@@ -443,6 +555,7 @@ export const getLeaderboardFriends = async (req, res) => {
         $match: {
           completed: true,
           started_at: { $gte: start, $lte: end },
+          duration: { $gt: 0, $lte: 86400 },
           user_id: {
             $in: friendIds.map((id) => new mongoose.Types.ObjectId(id)),
           },
