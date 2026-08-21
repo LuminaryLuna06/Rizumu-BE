@@ -29,12 +29,28 @@ function signRefreshToken(user) {
   });
 }
 
+const MAX_ACTIVE_DEVICES = 10;
+
+export const addRefreshTokenToUser = (user, token) => {
+  if (!Array.isArray(user.refreshTokens)) {
+    user.refreshTokens = [];
+  }
+  // Nếu có legacy token chưa nằm trong mảng thì gộp vào
+  if (user.refreshToken && !user.refreshTokens.includes(user.refreshToken)) {
+    user.refreshTokens.push(user.refreshToken);
+  }
+  user.refreshTokens.push(token);
+  // Giữ tối đa 10 thiết bị gần nhất
+  if (user.refreshTokens.length > MAX_ACTIVE_DEVICES) {
+    user.refreshTokens = user.refreshTokens.slice(-MAX_ACTIVE_DEVICES);
+  }
+  user.refreshToken = token;
+};
+
 const setRefreshTokenCookie = (res, token) => {
   res.cookie("refreshToken", token, {
     httpOnly: true,
-    // secure: process.env.NODE_ENV === "production",
     secure: true,
-    // sameSite: "Lax",
     sameSite: "none",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/",
@@ -65,7 +81,7 @@ export const register = async (req, res) => {
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
 
-    user.refreshToken = refreshToken;
+    addRefreshTokenToUser(user, refreshToken);
     user.status = "online";
 
     //phần tạo phòng mặc định
@@ -135,13 +151,12 @@ export const login = async (req, res) => {
     const ok = await user.comparePassword(password);
     if (!ok) return res.status(400).json({ message: "Invalid credentials" });
 
-    //phần tạo mới nếu người dùng đang nhập lại hacker sẽ mất session đang có
+    // Tạo cặp token mới cho thiết bị này
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
 
-    //cập nhật
     user.status = "online";
-    user.refreshToken = refreshToken;
+    addRefreshTokenToUser(user, refreshToken);
     await user.save();
 
     // Gửi Refresh Token qua Cookie
@@ -176,7 +191,7 @@ export const requestRefreshToken = async (req, res) => {
     if (!refresh_token)
       return res.status(401).json({ message: "No refresh token provided" });
 
-    // sử dụng jwt để xác thự refresh token
+    // sử dụng jwt để xác thực refresh token
     let decoded;
     try {
       decoded = jwt.verify(refresh_token, REFRESH_TOKEN_SECRET);
@@ -189,8 +204,13 @@ export const requestRefreshToken = async (req, res) => {
     const user = await User.findById(decoded.id);
     if (!user) return res.status(403).json({ message: "User not found" });
 
-    //nếu khác thì từ chối mọi api gửi đến yêu cầu phần xác thực
-    if (user.refreshToken !== refresh_token) {
+    // Kiểm tra token có nằm trong danh sách các thiết bị hợp lệ không (hỗ trợ đa thiết bị)
+    const isTokenValid =
+      (Array.isArray(user.refreshTokens) &&
+        user.refreshTokens.includes(refresh_token)) ||
+      user.refreshToken === refresh_token;
+
+    if (!isTokenValid) {
       return res.status(403).json({ message: "Invalid refresh token" });
     }
 
@@ -210,7 +230,7 @@ export const requestRefreshToken = async (req, res) => {
 export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
-      "-password_hash -refreshToken" //loại bỏ các trường nguy hiểm
+      "-password_hash -refreshToken -refreshTokens" //loại bỏ các trường nguy hiểm
     );
     const data = user;
     return res.json({ data });
@@ -222,31 +242,40 @@ export const getProfile = async (req, res) => {
 //đăng xuất
 export const logout = async (req, res) => {
   try {
-    // 1. Cập nhật Database: Xóa refresh token và set lại status
-    // Lưu ý: req.user.id có được là nhờ bạn đã chạy middleware verifyToken trước đó
     const user = await User.findById(req.user.id);
+    const currentRefreshToken = req.cookies.refreshToken;
 
     if (user) {
-      user.status = "offline";
-      user.refreshToken = null;
-      user.accessToken = null;
+      // Chỉ xóa token của thiết bị hiện tại, các thiết bị khác vẫn duy trì đăng nhập
+      if (Array.isArray(user.refreshTokens) && currentRefreshToken) {
+        user.refreshTokens = user.refreshTokens.filter(
+          (t) => t !== currentRefreshToken
+        );
+      }
+      if (user.refreshToken === currentRefreshToken) {
+        user.refreshToken = user.refreshTokens?.length
+          ? user.refreshTokens[user.refreshTokens.length - 1]
+          : null;
+      }
+
+      // Chỉ chuyển status sang offline nếu không còn thiết bị nào online
+      if (!user.refreshTokens || user.refreshTokens.length === 0) {
+        user.status = "offline";
+      }
       await user.save();
     }
 
-    // 2. QUAN TRỌNG: Xóa Cookie ở phía Trình duyệt
-    // Bạn phải truyền các option giống hệt lúc bạn res.cookie(...)
-    // (ngoại trừ maxAge và expires) để trình duyệt tìm đúng cookie để xóa.
+    // Xóa Cookie ở phía Trình duyệt (đảm bảo path: "/" và secure: true)
     res.clearCookie("refreshToken", {
       httpOnly: true,
-      secure: "true",
-      sameSite: "none", // Hoặc 'None' nếu bạn dùng Cross-site
-      // path: "/" // Nếu lúc set bạn có để path thì lúc xóa cũng phải có
+      secure: true,
+      sameSite: "none",
+      path: "/",
     });
 
-    // 3. Phản hồi cho client
     return res.status(200).json({
       message: "Logout success",
-      status: "offline",
+      status: user?.status || "offline",
     });
   } catch (err) {
     console.error("[LOGOUT ERROR]", err);
@@ -466,7 +495,7 @@ export const googleLogin = async (req, res) => {
 
       const accessToken = signAccessToken(user);
       const refreshToken = signRefreshToken(user);
-      user.refreshToken = refreshToken;
+      addRefreshTokenToUser(user, refreshToken);
 
       await user.save();
       await newRoom.save();
@@ -513,7 +542,7 @@ export const googleLogin = async (req, res) => {
 
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
-    user.refreshToken = refreshToken;
+    addRefreshTokenToUser(user, refreshToken);
     await user.save();
 
     setRefreshTokenCookie(res, refreshToken);

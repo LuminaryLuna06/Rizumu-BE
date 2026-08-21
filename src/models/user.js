@@ -9,6 +9,7 @@ const UserSchema = new Schema(
     //phần liên quan đến xác thực
     username: { type: String, required: true, unique: true },
     password_hash: { type: String },
+    refreshTokens: { type: [String], default: [] },
     refreshToken: { type: String, default: null },
     email: {
       type: String,
